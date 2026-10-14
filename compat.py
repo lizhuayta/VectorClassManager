@@ -3,7 +3,8 @@
 
 from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtWidgets import QFrame, QStyle
-from qgis.core import QgsFieldConstraints
+from qgis.core import Qgis, QgsFieldConstraints, QgsMessageLog
+from qgis.gui import QgsMapToolIdentify
 
 try:
     from qgis.PyQt.QtCore import QVariant
@@ -50,13 +51,26 @@ def _qgis_enum(enum_class, group_name, member_name, fallback_name=None):
     return getattr(enum_class, fallback_name or member_name)
 
 
+def log_exception(message, error, warning=True):
+    """Record recoverable errors without repeated user notifications."""
+    severity = _qgis_enum(
+        Qgis, "MessageLevel", "Warning" if warning else "Info"
+    )
+    QgsMessageLog.logMessage(
+        f"{message}: {type(error).__name__}: {error}",
+        "Vector Class Manager",
+        level=severity,
+        notifyUser=False,
+    )
+
+
 def qt_exec(widget, *args):
     exec_method = getattr(widget, "exec", None)
 
     if callable(exec_method):
         return exec_method(*args)
 
-    return widget.exec_(*args)
+    return getattr(widget, "exec_")(*args)
 
 
 RIGHT_DOCK_WIDGET_AREA = _qt_enum("DockWidgetArea", "RightDockWidgetArea")
@@ -70,12 +84,23 @@ POINTING_HAND_CURSOR = _qt_enum("CursorShape", "PointingHandCursor")
 RIGHT_BUTTON = _qt_enum("MouseButton", "RightButton")
 LEFT_BUTTON = _qt_enum("MouseButton", "LeftButton")
 SMALL_ICON_SIZE = _class_enum(QStyle, "PixelMetric", "PM_SmallIconSize")
-TITLE_BAR_NORMAL_BUTTON = _class_enum(QStyle, "StandardPixmap", "SP_TitleBarNormalButton")
-TITLE_BAR_CLOSE_BUTTON = _class_enum(QStyle, "StandardPixmap", "SP_TitleBarCloseButton")
+TITLE_BAR_NORMAL_BUTTON = _class_enum(
+    QStyle, "StandardPixmap", "SP_TitleBarNormalButton"
+)
+TITLE_BAR_CLOSE_BUTTON = _class_enum(
+    QStyle, "StandardPixmap", "SP_TitleBarCloseButton"
+)
 FRAME_HLINE = _class_enum(QFrame, "Shape", "HLine")
 FRAME_SUNKEN = _class_enum(QFrame, "Shadow", "Sunken")
-CONSTRAINT_NOT_NULL = _qgis_enum(QgsFieldConstraints, "Constraint", "ConstraintNotNull")
-CONSTRAINT_UNIQUE = _qgis_enum(QgsFieldConstraints, "Constraint", "ConstraintUnique")
+CONSTRAINT_NOT_NULL = _qgis_enum(
+    QgsFieldConstraints, "Constraint", "ConstraintNotNull"
+)
+CONSTRAINT_UNIQUE = _qgis_enum(
+    QgsFieldConstraints, "Constraint", "ConstraintUnique"
+)
+IDENTIFY_TOP_DOWN_ALL = _qgis_enum(
+    QgsMapToolIdentify, "IdentifyMode", "TopDownAll"
+)
 
 
 def is_integer_field(field):
@@ -93,8 +118,12 @@ def is_integer_field(field):
         try:
             if field.type() in tuple(integer_types):
                 return True
-        except Exception:
-            pass
+        except Exception as error:
+            log_exception(
+                "Could not inspect the field's Qt type; using its type name",
+                error,
+                warning=False,
+            )
 
     try:
         type_name = str(field.typeName()).strip().lower()
