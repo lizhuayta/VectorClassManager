@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>VectorClassManagerDockWidgetBase</class>
+ <widget class="QDockWidget" name="VectorClassManagerDockWidgetBase">
+  <property name="windowTitle">
+   <string>Vector Class Manager</string>
+  </property>
+  <widget class="QWidget" name="dockWidgetContents">
+   <layout class="QVBoxLayout" name="verticalLayout">
+    <item>
+     <widget class="QComboBox" name="layerCombo"/>
+    </item>
+    <item>
+     <widget class="QComboBox" name="fieldCombo"/>
+    </item>
+    <item>
+     <widget class="QListWidget" name="valueList"/>
+    </item>
+    <item>
+     <widget class="QPushButton" name="refreshButton">
+      <property name="text"><string>Refresh</string></property>
+     </widget>
+    </item>
+    <item>
+     <widget class="QLabel" name="infoLabel">
+      <property name="text"><string>Choose a value, then click features on the map to assign it.</string></property>
+      <property name="wordWrap"><bool>true</bool></property>
+     </widget>
+    </item>
+   </layout>
+  </widget>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

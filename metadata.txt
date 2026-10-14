@@ -1,0 +1,33 @@
+[general]
+name=Vector Class Manager
+qgisMinimumVersion=3.0
+qgisMaximumVersion=9.99
+description=Assign and manage attribute classes, digitize vector features by class, and edit categorized symbology from a compact side panel.
+version=1.0.0
+author=Liz Fedra Huayta Hernani
+email=huaytahe@outlook.com
+about=Vector Class Manager brings class assignment, vector digitizing, and category symbol editing together in a dockable panel. Choose a layer and a field from its attribute table to work with the class values stored in that field.
+    
+    Key features:
+    • List the unique class values stored in the chosen attribute-table field
+    • Preview category symbols and legend labels
+    • Assign a class to one or many selected features with one click
+    • Apply the active class continuously by clicking features on the map
+    • Digitize points, lines, and polygons with a preselected class, and switch classes while continuing to digitize
+    • Create new class values and assign them to selected features
+    • Rename existing class values across all matching features
+    • Edit the symbol associated with each class from the panel
+    • Preserve predefined symbology categories, including those not currently used by any feature
+    • Activate classes using custom keyboard shortcuts
+
+    Class assignment, renaming, and feature creation require the target layer to be in edit mode. Symbol previews and editing require categorized symbology based on the chosen field.
+    Compatible QGIS 3.x and QGIS 4.x
+homepage=https://github.com/lizhuayta/VectorClassManager
+repository=https://github.com/lizhuayta/VectorClassManager
+tracker=https://github.com/lizhuayta/VectorClassManager/issues
+tags=attributes, class editing, symbology, vector, feature creation by class
+category=Vector
+icon=resources/icons/icon_on.png
+experimental=False
+deprecated=False
+hasProcessingProvider=False
