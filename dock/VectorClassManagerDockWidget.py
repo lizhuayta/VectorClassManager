@@ -35,10 +35,13 @@ from qgis.PyQt.QtWidgets import (
     QFrame,
     QToolButton,
     QGraphicsDropShadowEffect,
-    QLineEdit
+    QLineEdit,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
+    QStyle,
 )
 from qgis.PyQt.QtGui import QIcon, QPixmap, QPainter, QKeySequence, QColor, QDesktopServices
-from qgis.PyQt.QtCore import QCoreApplication, QTimer, QUrl
+from qgis.PyQt.QtCore import QCoreApplication, QEvent, QTimer, QUrl
 from qgis.core import QgsProject, QgsVectorLayer, QgsCategorizedSymbolRenderer, QgsStyle, QgsRendererCategory, QgsSymbol, QgsSettings, QgsGeometry, QgsCoordinateTransform, QgsEditFormConfig, QgsFieldConstraints, QgsDefaultValue, Qgis, NULL
 from qgis.gui import QgsMapToolIdentifyFeature, QgsSymbolSelectorDialog
 from qgis.utils import iface
@@ -50,6 +53,7 @@ from ..compat import (
     CUSTOM_CONTEXT_MENU,
     FRAME_HLINE,
     FRAME_SUNKEN,
+    IDENTIFY_TOP_DOWN_ALL,
     LEFT_BUTTON,
     POINTING_HAND_CURSOR,
     RICH_TEXT,
@@ -60,6 +64,7 @@ from ..compat import (
     TRANSPARENT,
     USER_ROLE,
     is_integer_field,
+    log_exception,
     qt_exec,
 )
 import json
@@ -68,6 +73,18 @@ from html import escape
 from urllib.parse import quote
 
 UI_PATH = os.path.join(os.path.dirname(__file__), 'VectorClassManagerDockWidget.ui')
+
+
+class ClassListItemDelegate(QStyledItemDelegate):
+    """Hide hover feedback while the class context menu is open."""
+
+    def paint(self, painter, option, index):
+        if self.parent().property("classMenuOpen"):
+            option = QStyleOptionViewItem(option)
+            style_flags = getattr(QStyle, "StateFlag", QStyle)
+            option.state &= ~style_flags.State_MouseOver
+
+        super().paint(painter, option, index)
 
 
 class VectorClassManagerDockWidget(QDockWidget):
@@ -94,6 +111,8 @@ class VectorClassManagerDockWidget(QDockWidget):
 
         # Value list
         self.valueList = self.findChild(object, 'valueList')
+        self.valueList.setProperty("classMenuOpen", False)
+        self.valueList.setItemDelegate(ClassListItemDelegate(self.valueList))
 
         settings = QgsSettings()
         ui_theme = str(settings.value("UI/UITheme", "default")).strip().lower()
@@ -233,7 +252,7 @@ class VectorClassManagerDockWidget(QDockWidget):
                     color: #333333;
                 }
 
-                QListWidget::item:hover {
+                QListWidget[classMenuOpen="false"]::item:hover:!selected {
                     background-color: #f2f2f2;
                 }
 
@@ -259,7 +278,7 @@ class VectorClassManagerDockWidget(QDockWidget):
                     color: white;
                 }
 
-                QListWidget::item:hover {
+                QListWidget[classMenuOpen="false"]::item:hover:!selected {
                     background-color: #4a4a4a;
                 }
 
@@ -384,6 +403,7 @@ class VectorClassManagerDockWidget(QDockWidget):
         self.valueList.itemClicked.connect(self.value_selected)
 
         # Right-click on a class: symbol / shortcut / remove shortcut
+        self.valueList.viewport().installEventFilter(self)
         self.valueList.setContextMenuPolicy(CUSTOM_CONTEXT_MENU)
         self.valueList.customContextMenuRequested.connect(self.show_class_context_menu)
 
@@ -392,7 +412,7 @@ class VectorClassManagerDockWidget(QDockWidget):
         self.load_shortcuts_from_project()
         self.load_layers()
 
-	# Sync with active layer
+        # Sync with active layer
         iface.currentLayerChanged.connect(self.sync_with_active_layer)
 
         try:
@@ -400,11 +420,46 @@ class VectorClassManagerDockWidget(QDockWidget):
         except Exception:
             try:
                 QgsProject.instance().layerWasAdded.connect(self.project_layers_added)
-            except Exception:
-                pass
+            except Exception as error:
+                log_exception("Could not connect project layer signals", error)
 
         self.sync_with_active_layer(iface.activeLayer())
-	
+
+    def eventFilter(self, watched, event):
+        """Keep right-clicks from selecting or activating a different class."""
+        if watched is self.valueList.viewport():
+            event_type = event.type()
+            if event_type in (
+                QEvent.Type.MouseButtonPress,
+                QEvent.Type.MouseButtonRelease,
+                QEvent.Type.MouseButtonDblClick,
+            ):
+                if event.button() == RIGHT_BUTTON:
+                    if event_type != QEvent.Type.MouseButtonRelease:
+                        self.set_class_menu_open(True)
+                    return True
+
+                if event_type == QEvent.Type.MouseButtonPress:
+                    self.set_class_menu_open(False)
+
+            elif event_type == QEvent.Type.MouseMove:
+                if (
+                    not getattr(self, "_class_context_menu_visible", False)
+                    and not event.buttons() & RIGHT_BUTTON
+                ):
+                    self.set_class_menu_open(False)
+
+        return super().eventFilter(watched, event)
+
+    def set_class_menu_open(self, menu_open):
+        """Refresh hover styling immediately, without changing selection."""
+        if self.valueList.property("classMenuOpen") == menu_open:
+            return
+
+        self.valueList.setProperty("classMenuOpen", menu_open)
+        self.valueList.setStyleSheet(self.valueList.styleSheet())
+        self.valueList.viewport().repaint()
+
     def showEvent(self, event):
         """Resume sidebar work when the dock becomes visible."""
         super().showEvent(event)
@@ -619,7 +674,7 @@ class VectorClassManagerDockWidget(QDockWidget):
                     color: white;
                 }
 
-                QListWidget::item:hover {
+                QListWidget[classMenuOpen="false"]::item:hover:!selected {
                     background-color: #fee6ce;
                     color: black;
                 }
@@ -647,7 +702,7 @@ class VectorClassManagerDockWidget(QDockWidget):
                 color: #333333;
             }
 
-            QListWidget::item:hover {
+            QListWidget[classMenuOpen="false"]::item:hover:!selected {
                 background-color: #fdd0a2;
                 color: black;
             }
@@ -771,8 +826,8 @@ class VectorClassManagerDockWidget(QDockWidget):
                 lambda _fid, field_index, _value, layer_id=layer_id:
                     self.clear_value_cache_for_field_index(layer_id, field_index)
             )
-        except Exception:
-            pass
+        except Exception as error:
+            log_exception("Could not monitor attribute changes", error)
 
         for signal_name in (
             "featureAdded",
@@ -797,8 +852,10 @@ class VectorClassManagerDockWidget(QDockWidget):
                     lambda *args, layer_id=layer_id:
                         self.clear_value_cache(layer_id=layer_id)
                 )
-            except Exception:
-                pass
+            except Exception as error:
+                log_exception(
+                    f"Could not connect layer signal {signal_name}", error
+                )
 
     def contact_email(self):
         """Contact email."""
@@ -1059,8 +1116,12 @@ class VectorClassManagerDockWidget(QDockWidget):
         try:
             if value == NULL:
                 return True
-        except Exception:
-            pass
+        except Exception as error:
+            log_exception(
+                "Could not compare the value with QGIS NULL",
+                error,
+                warning=False,
+            )
 
         try:
             return bool(value.isNull())
@@ -1379,8 +1440,12 @@ class VectorClassManagerDockWidget(QDockWidget):
         try:
             if renderer_value == value:
                 return True
-        except Exception:
-            pass
+        except Exception as error:
+            log_exception(
+                "Could not compare category values directly",
+                error,
+                warning=False,
+            )
 
         renderer_text = str(renderer_value).strip()
         value_text = str(text).strip()
@@ -1710,8 +1775,8 @@ class VectorClassManagerDockWidget(QDockWidget):
             if self.map_tool:
                 try:
                     iface.mapCanvas().unsetMapTool(self.map_tool)
-                except Exception:
-                    pass
+                except Exception as error:
+                    log_exception("Could not stop map-click assignment", error)
 
                 self.map_tool = None
 
@@ -1805,8 +1870,12 @@ class VectorClassManagerDockWidget(QDockWidget):
         try:
             if item:
                 self.highlight_active_class(item)
-        except Exception:
-            pass
+        except Exception as error:
+            log_exception(
+                "Could not restore the class highlight",
+                error,
+                warning=False,
+            )
 
     def item_class_value(self, item):
         """Get the real class value without visual helper text."""
@@ -1908,8 +1977,8 @@ class VectorClassManagerDockWidget(QDockWidget):
                 field_idx,
                 QgsDefaultValue("", False)
             )
-        except Exception:
-            pass
+        except Exception as error:
+            log_exception("Could not clear the class field default", error)
 
     def class_display_text(self, value, creation_marker=False, legend=""):
         """Create visible class text while keeping shortcuts."""
@@ -1973,7 +2042,7 @@ class VectorClassManagerDockWidget(QDockWidget):
 
         self.valueList.setStyleSheet(base_style + f"""
             /* creation-mode */
-            QListWidget::item:hover {{
+            QListWidget[classMenuOpen="false"]::item:hover:!selected {{
                 background-color: {hover_background};
                 color: black;
             }}
@@ -2047,8 +2116,12 @@ class VectorClassManagerDockWidget(QDockWidget):
         try:
             if item:
                 self.highlight_active_class(item)
-        except Exception:
-            pass
+        except Exception as error:
+            log_exception(
+                "Could not restore the digitizing class highlight",
+                error,
+                warning=False,
+            )
 
         self._creation_flash_base_style = None
         self._creation_flash_item = None
@@ -2152,8 +2225,8 @@ class VectorClassManagerDockWidget(QDockWidget):
         try:
             if self.map_tool:
                 iface.mapCanvas().unsetMapTool(self.map_tool)
-        except Exception:
-            pass
+        except Exception as error:
+            log_exception("Could not deactivate the class map tool", error)
 
         self.map_tool = None
 
@@ -2174,8 +2247,12 @@ class VectorClassManagerDockWidget(QDockWidget):
 
         try:
             iface.mapCanvas().mapToolSet.disconnect(self.on_feature_creation_map_tool_changed)
-        except Exception:
-            pass
+        except Exception as error:
+            log_exception(
+                "Map-tool change signal could not be disconnected",
+                error,
+                warning=False,
+            )
 
         self.entity_creation_map_tool_signal_connected = False
 
@@ -2244,13 +2321,21 @@ class VectorClassManagerDockWidget(QDockWidget):
 
         try:
             self.entity_creation_layer.featureAdded.disconnect(self.on_feature_added_for_class)
-        except Exception:
-            pass
+        except Exception as error:
+            log_exception(
+                "Previous feature-created signal was not connected",
+                error,
+                warning=False,
+            )
 
         try:
             self.entity_creation_layer.editingStopped.disconnect(self.exit_feature_creation_mode)
-        except Exception:
-            pass
+        except Exception as error:
+            log_exception(
+                "Previous editing-stopped signal was not connected",
+                error,
+                warning=False,
+            )
 
         try:
             self.entity_creation_layer.featureAdded.connect(self.on_feature_added_for_class)
@@ -2363,13 +2448,21 @@ class VectorClassManagerDockWidget(QDockWidget):
         if layer_id:
             try:
                 layer.featureAdded.disconnect(self.on_feature_added_for_class)
-            except Exception:
-                pass
+            except Exception as error:
+                log_exception(
+                    "Feature-created signal could not be disconnected",
+                    error,
+                    warning=False,
+                )
 
             try:
                 layer.editingStopped.disconnect(self.exit_feature_creation_mode)
-            except Exception:
-                pass
+            except Exception as error:
+                log_exception(
+                    "Editing-stopped signal could not be disconnected",
+                    error,
+                    warning=False,
+                )
 
         self.disconnect_feature_creation_map_tool_signal()
 
@@ -2396,8 +2489,8 @@ class VectorClassManagerDockWidget(QDockWidget):
 
         try:
             iface.actionPan().trigger()
-        except Exception:
-            pass
+        except Exception as error:
+            log_exception("Could not restore the map pan tool", error)
 
         if update_info:
             self.infoLabel.setText(self.tr("Feature creation mode stopped."))
@@ -2435,16 +2528,16 @@ class VectorClassManagerDockWidget(QDockWidget):
 
             if default_value not in (None, ""):
                 return False
-        except Exception:
-            pass
+        except Exception as error:
+            log_exception("Could not inspect the ID field default", error)
 
         try:
             default_definition = layer.defaultValueDefinition(field_index)
 
             if default_definition and default_definition.expression():
                 return False
-        except Exception:
-            pass
+        except Exception as error:
+            log_exception("Could not inspect the ID default expression", error)
 
         constraints = field.constraints()
         constraint_flags = constraints.constraints()
@@ -2465,11 +2558,15 @@ class VectorClassManagerDockWidget(QDockWidget):
 
             try:
                 value = int(value)
-            except Exception:
-                continue
-
-            if value > max_value:
-                max_value = value
+            except Exception as error:
+                log_exception(
+                    "Skipping a non-integer value while calculating an ID",
+                    error,
+                    warning=False,
+                )
+            else:
+                if value > max_value:
+                    max_value = value
 
         return max_value + 1
 
@@ -2538,16 +2635,21 @@ class VectorClassManagerDockWidget(QDockWidget):
 
                 if default_value not in (None, ""):
                     continue
-            except Exception:
-                pass
+            except Exception as error:
+                log_exception(
+                    "Could not inspect a required field default", error
+                )
 
             try:
                 default_definition = layer.defaultValueDefinition(field_index)
 
                 if default_definition and default_definition.expression():
                     continue
-            except Exception:
-                pass
+            except Exception as error:
+                log_exception(
+                    "Could not inspect a required field default expression",
+                    error,
+                )
 
             if self.field_has_provider_default(layer, field_index):
                 continue
@@ -2596,16 +2698,21 @@ class VectorClassManagerDockWidget(QDockWidget):
 
                 if default_value not in (None, ""):
                     continue
-            except Exception:
-                pass
+            except Exception as error:
+                log_exception(
+                    "Could not inspect a creation field default", error
+                )
 
             try:
                 default_definition = layer.defaultValueDefinition(field_index)
 
                 if default_definition and default_definition.expression():
                     continue
-            except Exception:
-                pass
+            except Exception as error:
+                log_exception(
+                    "Could not inspect a creation field default expression",
+                    error,
+                )
 
             if self.field_has_provider_default(layer, field_index):
                 continue
@@ -2686,27 +2793,23 @@ class VectorClassManagerDockWidget(QDockWidget):
         for field_idx, default_definition in list(self.entity_creation_original_defaults.items()):
             try:
                 layer.setDefaultValueDefinition(field_idx, default_definition)
-            except Exception:
-                pass
+            except Exception as error:
+                log_exception("Could not restore a layer field default", error)
 
         self.entity_creation_original_defaults = {}
 
     def feature_form_suppression_on_value(self):
         """Get the form suppression value for the current QGIS version."""
-        try:
-            return Qgis.AttributeFormSuppression.On
-        except Exception:
-            pass
+        for enum_class, group_name, member_name in (
+            (Qgis, "AttributeFormSuppression", "On"),
+            (QgsEditFormConfig, "FeatureFormSuppress", "SuppressOn"),
+        ):
+            enum_group = getattr(enum_class, group_name, None)
+            value = getattr(enum_group, member_name, None)
+            if value is not None:
+                return value
 
-        try:
-            return QgsEditFormConfig.FeatureFormSuppress.SuppressOn
-        except Exception:
-            pass
-
-        try:
-            return QgsEditFormConfig.SuppressOn
-        except Exception:
-            return 1
+        return getattr(QgsEditFormConfig, "SuppressOn", 1)
 
     def suppress_feature_creation_form(self, layer):
         """Temporarily hide the native form when required attributes are already resolved."""
@@ -2736,8 +2839,8 @@ class VectorClassManagerDockWidget(QDockWidget):
             config = layer.editFormConfig()
             config.setSuppress(self.entity_creation_original_suppress)
             layer.setEditFormConfig(config)
-        except Exception:
-            pass
+        except Exception as error:
+            log_exception("Could not restore the attribute form settings", error)
 
         self.entity_creation_form_suppressed = False
         self.entity_creation_original_suppress = None
@@ -2746,8 +2849,8 @@ class VectorClassManagerDockWidget(QDockWidget):
         """Activate the native add feature tool."""
         try:
             iface.setActiveLayer(self.current_layer)
-        except Exception:
-            pass
+        except Exception as error:
+            log_exception("Could not activate the digitizing layer", error)
 
         try:
             action = iface.actionAddFeature()
@@ -2756,8 +2859,8 @@ class VectorClassManagerDockWidget(QDockWidget):
                 action.trigger()
                 self.entity_creation_map_tool = iface.mapCanvas().mapTool()
                 return True
-        except Exception:
-            pass
+        except Exception as error:
+            log_exception("Could not start the feature creation tool", error)
 
         QMessageBox.warning(
             self,
@@ -3021,7 +3124,13 @@ class VectorClassManagerDockWidget(QDockWidget):
             action_shortcut = menu.addAction(self.tr("Assign shortcut"))
             action_remove_shortcut = menu.addAction(self.tr("Remove shortcut"))
 
-        selected_action = qt_exec(menu, self.valueList.mapToGlobal(pos))
+        self._class_context_menu_visible = True
+        self.set_class_menu_open(True)
+        try:
+            selected_action = qt_exec(menu, self.valueList.mapToGlobal(pos))
+        finally:
+            self._class_context_menu_visible = False
+            self.set_class_menu_open(False)
 
         if selected_action == action_new_value:
             self.assign_new_class_to_selection()
@@ -3536,8 +3645,12 @@ class MapClickTool(QgsMapToolIdentifyFeature):
         """Return click pixel coordinates for QGIS 3 and QGIS 4 mouse events."""
         try:
             return event.x(), event.y()
-        except Exception:
-            pass
+        except Exception as error:
+            log_exception(
+                "Trying alternative mouse-event coordinate methods",
+                error,
+                warning=False,
+            )
 
         for point_method_name in ("pixelPoint", "originalPixelPoint", "pos"):
             try:
@@ -3548,8 +3661,12 @@ class MapClickTool(QgsMapToolIdentifyFeature):
 
                 point = point_method()
                 return point.x(), point.y()
-            except Exception:
-                continue
+            except Exception as error:
+                log_exception(
+                    f"Mouse-event method {point_method_name} was unavailable",
+                    error,
+                    warning=False,
+                )
 
         return None
 
@@ -3584,7 +3701,7 @@ class MapClickTool(QgsMapToolIdentifyFeature):
             pixel_xy[0],
             pixel_xy[1],
             [self.layer],
-            QgsMapToolIdentifyFeature.TopDownAll
+            IDENTIFY_TOP_DOWN_ALL
         )
 
         if not results:
@@ -3623,8 +3740,8 @@ class MapClickTool(QgsMapToolIdentifyFeature):
                     QgsProject.instance()
                 )
                 point = transform.transform(point)
-        except Exception:
-            pass
+        except Exception as error:
+            log_exception("Could not transform the map-click coordinates", error)
 
         point_geometry = QgsGeometry.fromPointXY(point)
 
@@ -3638,8 +3755,11 @@ class MapClickTool(QgsMapToolIdentifyFeature):
             try:
                 if geometry.contains(point_geometry) or geometry.intersects(point_geometry):
                     return feature
-            except Exception:
-                continue
+            except Exception as error:
+                log_exception(
+                    "Could not test a feature geometry at the map click",
+                    error,
+                )
 
         return results[0].mFeature if results else None
 
@@ -3647,7 +3767,9 @@ def apply_value_to_feature_ids(layer, field_name, value_text, feature_ids, paren
     """Apply a value to one or more features."""
     if not layer or not field_name or not feature_ids:
         return False
-    tr = lambda text: QCoreApplication.translate("VectorClassManagerDockWidget", text)
+
+    def tr(text):
+        return QCoreApplication.translate("VectorClassManagerDockWidget", text)
 
     if not layer.isEditable():
         QMessageBox.warning(
@@ -3708,13 +3830,13 @@ def cast_value(feat, layer, field_name, value_text):
     if t in ('Integer', 'Integer64'):
         try:
             return int(value_text)
-        except:
+        except (TypeError, ValueError, OverflowError):
             return value_text
 
     if t in ('Double', 'Real'):
         try:
             return float(value_text)
-        except:
+        except (TypeError, ValueError, OverflowError):
             return value_text
 
     return value_text
